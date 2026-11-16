@@ -1,31 +1,31 @@
 import { reactive, ref } from 'vue'
 import {
-  addDoc,
   collection,
   deleteDoc,
-  deleteField,
   doc,
-  getDoc,
   getDocs,
-  limit,
   orderBy,
   query,
   runTransaction,
   serverTimestamp,
   setDoc,
-  startAfter,
-  Timestamp,
-  updateDoc,
-  where,
 } from 'firebase/firestore'
-import { signInAnonymously } from 'firebase/auth'
-import { auth, db } from '../firebase'
+import { db } from '../firebase'
 import { SENTENCES, defaultWords } from '../data/words'
 
-const KEY = 'km-tr-en-v5'
-const USER_WRITE_MS = 700
+const PROGRESS_KEY = 'km-tr-en-v5'
+const CATALOG_KEY = 'km-catalog-v1'
+const PENDING_KEY = 'km-pending-v1'
 
-const notebookIds = new Map(defaultWords().map((word, index) => [word.t, notebookDocId(index)]))
+const bundled = defaultWords()
+const notebookIds = new Map(bundled.map((word, index) => [word.t, notebookDocId(index)]))
+const byPair = new Map(bundled.map((word) => [`${word.t}\0${word.e}`, word.p]))
+const byTurkish = new Map()
+bundled.forEach((word) => {
+  const list = byTurkish.get(word.t)
+  if (list) list.push(word)
+  else byTurkish.set(word.t, [word])
+})
 
 function notebookDocId(index) {
   return `n${String(index + 1).padStart(4, '0')}`
@@ -46,22 +46,228 @@ export function wordDocId(turkish) {
   return `u${(a >>> 0).toString(16)}${(b >>> 0).toString(16)}`
 }
 
-function load() {
+function readJson(key) {
   try {
-    const raw = localStorage.getItem(KEY)
+    if (typeof localStorage === 'undefined') return null
+    const raw = localStorage.getItem(key)
     if (!raw) return null
-    const data = JSON.parse(raw)
-    if (data && Array.isArray(data.w) && data.w.length) {
-      if (!Array.isArray(data.events)) data.events = []
-      return data
-    }
+    return JSON.parse(raw)
   } catch {
-    /* bozuk kayıt yok sayılır */
+    return null
   }
-  return null
 }
 
-export const state = reactive(load() || { w: defaultWords(), st: 0, v: 0, events: [] })
+function writeJson(key, value) {
+  try {
+    if (typeof localStorage === 'undefined') return false
+    localStorage.setItem(key, JSON.stringify(value))
+    return true
+  } catch {
+    return false
+  }
+}
+
+function presentWord(word) {
+  const entry = {
+    id: word.id || (word.t ? wordDocId(word.t) : ''),
+    t: word.t,
+    e: word.e,
+    p: word.p || '',
+    c: word.c || '',
+    ce: word.ce || '',
+  }
+  const sentence = SENTENCES[entry.t]
+  if (sentence && !entry.c) {
+    entry.c = sentence[0] || ''
+    entry.ce = sentence[1] || ''
+  }
+  if (!entry.p) {
+    const exact = byPair.get(`${entry.t}\0${entry.e}`)
+    if (exact) entry.p = exact
+    else {
+      const matches = byTurkish.get(entry.t) || []
+      if (matches.length === 1) entry.p = matches[0].p || ''
+    }
+  }
+  return entry
+}
+
+function bundledCatalog() {
+  return bundled.map((word) => presentWord({ t: word.t, e: word.e, p: word.p }))
+}
+
+function sanitizeScores(raw) {
+  const scores = {}
+  if (!raw || typeof raw !== 'object') return scores
+  Object.keys(raw).forEach((id) => {
+    const value = raw[id]
+    if (!value || typeof value !== 'object') return
+    scores[id] = {
+      s: Number(value.s) || 0,
+      L: value.L ? 1 : 0,
+      learnedAt: typeof value.learnedAt === 'number' ? value.learnedAt : null,
+    }
+  })
+  return scores
+}
+
+function scoreFrom(word) {
+  return {
+    s: Number(word.s) || 0,
+    L: word.L ? 1 : 0,
+    learnedAt: typeof word.learnedAt === 'number' ? word.learnedAt : null,
+  }
+}
+
+function normalizePending(raw) {
+  if (!Array.isArray(raw)) return []
+  const ops = []
+  raw.forEach((op) => {
+    if (!op || typeof op.id !== 'string' || !op.id) return
+    if (op.op === 'delete') {
+      ops.push({ op: 'delete', id: op.id })
+      return
+    }
+    if (op.op !== 'upsert' || !op.t || !op.e) return
+    ops.push({
+      op: 'upsert',
+      id: op.id,
+      t: op.t,
+      e: op.e,
+      p: op.p || '',
+      c: op.c || '',
+      ce: op.ce || '',
+    })
+  })
+  return ops
+}
+
+function rememberLegacyScores(words) {
+  words.forEach((word) => {
+    const id = word.id || (word.t ? wordDocId(word.t) : '')
+    if (!id) return
+    scores[id] = scoreFrom(word)
+  })
+}
+
+function overlayPending(words) {
+  const deletes = new Set(pending.filter((op) => op.op === 'delete').map((op) => op.id))
+  const upserts = pending.filter((op) => op.op === 'upsert' && !deletes.has(op.id))
+  const upsertIds = new Set(upserts.map((op) => op.id))
+  const seen = new Set()
+  const base = []
+  words.forEach((word) => {
+    if (!word.id || !word.t || !word.e || deletes.has(word.id) || upsertIds.has(word.id) || seen.has(word.id)) return
+    seen.add(word.id)
+    base.push(word)
+  })
+  const extras = []
+  upserts.forEach((op) => {
+    const entry = presentWord(op)
+    if (!entry.id || !entry.t || !entry.e || seen.has(entry.id)) return
+    seen.add(entry.id)
+    extras.push(entry)
+  })
+  return [...extras, ...base]
+}
+
+let scores = {}
+let pending = []
+let lastCloudIds = []
+let catalogSource = 'bundle'
+let hasCatalogCache = false
+let downloadToastShown = false
+let flushing = null
+let refreshFlight = null
+
+function loadLocal() {
+  const progress = readJson(PROGRESS_KEY)
+  const cached = readJson(CATALOG_KEY)
+  pending = normalizePending(readJson(PENDING_KEY))
+  scores = {}
+
+  let st = 0
+  let events = []
+  let legacyWords = null
+  if (progress && progress.v === 3 && progress.scores && typeof progress.scores === 'object') {
+    scores = sanitizeScores(progress.scores)
+    st = Number(progress.st) || 0
+    events = Array.isArray(progress.events) ? progress.events : []
+  } else if (progress && typeof progress === 'object') {
+    st = Number(progress.st) || 0
+    events = Array.isArray(progress.events) ? progress.events : []
+    if (Array.isArray(progress.w) && progress.w.length) legacyWords = progress.w
+  }
+
+  let catalog = null
+  if (cached && Array.isArray(cached.words) && cached.words.length) {
+    catalog = cached.words.map((word) => presentWord(word)).filter((word) => word.id && word.t && word.e)
+    if (catalog.length) {
+      hasCatalogCache = true
+      if (cached.source === 'cloud') {
+        catalogSource = 'cloud'
+        lastCloudIds = Array.isArray(cached.cloudIds)
+          ? cached.cloudIds.filter((id) => typeof id === 'string' && id)
+          : []
+      } else {
+        catalogSource = 'device'
+      }
+      if (legacyWords) rememberLegacyScores(legacyWords)
+    }
+  }
+
+  if (!catalog || !catalog.length) {
+    if (legacyWords) {
+      catalog = []
+      legacyWords.forEach((word) => {
+        const entry = presentWord(word)
+        if (!entry.id || !entry.t || !entry.e) return
+        scores[entry.id] = scoreFrom(word)
+        catalog.push(entry)
+      })
+      if (catalog.length) {
+        hasCatalogCache = true
+        catalogSource = 'device'
+      }
+    }
+  }
+
+  if (!catalog || !catalog.length) {
+    catalog = bundledCatalog()
+    hasCatalogCache = false
+    catalogSource = 'bundle'
+  }
+
+  return {
+    catalog: overlayPending(catalog),
+    st,
+    events,
+  }
+}
+
+const loaded = loadLocal()
+
+function viewWord(entry) {
+  const score = scores[entry.id] || {}
+  return {
+    id: entry.id,
+    t: entry.t,
+    e: entry.e,
+    p: entry.p || '',
+    c: entry.c || '',
+    ce: entry.ce || '',
+    s: Number(score.s) || 0,
+    L: score.L ? 1 : 0,
+    learnedAt: typeof score.learnedAt === 'number' ? score.learnedAt : null,
+  }
+}
+
+export const state = reactive({
+  w: loaded.catalog.map((entry) => viewWord(entry)),
+  st: loaded.st,
+  v: 2,
+  events: loaded.events,
+})
 export const screen = ref('home')
 export const quizDir = ref('te')
 export const toastText = ref('')
@@ -69,69 +275,68 @@ export const cloudOn = ref(false)
 export const cloudError = ref('')
 
 let toastTimer = 0
-let currentUid = ''
-let writeTimer = 0
-let flushing = null
-let userDirty = false
-let localEdits = 0
-let bootPromise = null
-const pendingDeletes = new Set()
-
 export let seedRan = false
 export let lastCloudError = ''
 
-function migrate() {
-  const upgrade = state.v !== 2
-  const defaults = defaultWords()
-  const byPair = new Map(defaults.map((word) => [`${word.t}\0${word.e}`, word.p]))
-  const byTurkish = new Map()
-  defaults.forEach((word) => {
-    const list = byTurkish.get(word.t)
-    if (list) list.push(word)
-    else byTurkish.set(word.t, [word])
-  })
-  if (!Array.isArray(state.events)) state.events = []
-  state.w.forEach((word) => {
-    const sentence = SENTENCES[word.t]
-    if (sentence && (upgrade || !word.c)) {
-      word.c = sentence[0]
-      word.ce = sentence[1]
-    }
-    if (!word.p) {
-      const exact = byPair.get(`${word.t}\0${word.e}`)
-      if (exact) word.p = exact
-      else {
-        const matches = byTurkish.get(word.t) || []
-        if (matches.length === 1) word.p = matches[0].p
-      }
-    }
-    if (!word.id && word.t) word.id = wordDocId(word.t)
-    if (!word.c) word.c = ''
-    if (!word.ce) word.ce = ''
-    if (word.s == null) word.s = 0
-    if (!word.L) word.L = 0
-    if (typeof word.learnedAt !== 'number') word.learnedAt = null
-  })
-  state.v = 2
+function remember(word) {
+  if (!word?.id) return
+  scores[word.id] = scoreFrom(word)
 }
 
-migrate()
-
-function persistLocal() {
-  try {
-    if (typeof localStorage === 'undefined') return
-    localStorage.setItem(KEY, JSON.stringify(state))
-  } catch {
-    /* gizli modda depolama kapalı olabilir */
+function progressPayload() {
+  state.w.forEach(remember)
+  return {
+    v: 3,
+    st: Number(state.st) || 0,
+    events: Array.isArray(state.events) ? state.events : [],
+    scores,
   }
 }
+
+function catalogPayload() {
+  return {
+    source: catalogSource === 'cloud' ? 'cloud' : 'device',
+    cloudIds: catalogSource === 'cloud' ? lastCloudIds : [],
+    words: state.w.map((word) => ({
+      id: word.id,
+      t: word.t,
+      e: word.e,
+      p: word.p || '',
+      c: word.c || '',
+      ce: word.ce || '',
+    })),
+  }
+}
+
+function persistProgress() {
+  return writeJson(PROGRESS_KEY, progressPayload())
+}
+
+function persistCatalog() {
+  const ok = writeJson(CATALOG_KEY, catalogPayload())
+  if (ok) hasCatalogCache = true
+  return ok
+}
+
+function persistPending() {
+  return writeJson(PENDING_KEY, pending)
+}
+
+function persistAll() {
+  const catalogOk = persistCatalog()
+  persistPending()
+  if (catalogOk) persistProgress()
+  return catalogOk
+}
+
+if (hasCatalogCache) persistAll()
 
 function reportCloudError(error) {
   const code = error?.code || 'error'
   const message = error?.message || String(error)
   lastCloudError = `${code}: ${message}`
   cloudError.value = lastCloudError
-  console.error(error)
+  console.warn(error)
 }
 
 function toMillis(value) {
@@ -144,102 +349,79 @@ function toMillis(value) {
   return null
 }
 
-function copyCloudWord(word, scores) {
-  return {
+function queueUpsert(word) {
+  pending = pending.filter((op) => op.id !== word.id)
+  pending.push({
+    op: 'upsert',
     id: word.id,
     t: word.t,
     e: word.e,
     p: word.p || '',
     c: word.c || '',
     ce: word.ce || '',
-    s: scores ? Number(scores.s) || 0 : 0,
-    L: scores && scores.L ? 1 : 0,
-    learnedAt: scores ? toMillis(scores.learnedAt) : null,
-  }
+  })
 }
 
-function buildUserPayload() {
-  const progress = {}
+function queueDelete(id) {
+  pending = pending.filter((op) => op.id !== id)
+  pending.push({ op: 'delete', id })
+}
+
+function replaceWords(entries) {
+  state.w.forEach(remember)
+  const existing = new Map(state.w.map((word) => [word.id, word]))
+  const next = []
+  const seen = new Set()
+  entries.forEach((entry) => {
+    if (!entry?.id || !entry.t || !entry.e || seen.has(entry.id)) return
+    seen.add(entry.id)
+    const prev = existing.get(entry.id)
+    if (prev) {
+      prev.t = entry.t
+      prev.e = entry.e
+      if (entry.p) prev.p = entry.p
+      if (entry.c) prev.c = entry.c
+      if (entry.ce) prev.ce = entry.ce
+      next.push(prev)
+      return
+    }
+    next.push(viewWord(entry))
+  })
+  state.w.splice(0, state.w.length, ...next)
+}
+
+function mergeCloud(cloudWords) {
+  const cloudIds = new Set()
+  const remote = []
+  cloudWords.forEach((word) => {
+    const entry = presentWord(word)
+    if (!entry.id || !entry.t || !entry.e || cloudIds.has(entry.id)) return
+    cloudIds.add(entry.id)
+    remote.push(entry)
+  })
+
+  const deletes = new Set(pending.filter((op) => op.op === 'delete').map((op) => op.id))
+  const knownCloud = new Set(lastCloudIds)
   state.w.forEach((word) => {
-    if (!word.id) return
-    const s = Number(word.s) || 0
-    const learned = word.L ? 1 : 0
-    if (!s && !learned && !word.learnedAt) return
-    const entry = { s, L: learned }
-    if (learned && word.learnedAt) entry.learnedAt = Timestamp.fromMillis(Number(word.learnedAt))
-    progress[word.id] = entry
+    if (!word?.id || cloudIds.has(word.id) || deletes.has(word.id)) return
+    if (pending.some((op) => op.op === 'upsert' && op.id === word.id)) return
+    if (knownCloud.has(word.id)) return
+    if (!knownCloud.size && !String(word.id).startsWith('u')) return
+    queueUpsert(word)
   })
-  return { stars: Number(state.st) || 0, progress }
-}
 
-function scheduleCloudUser() {
-  userDirty = true
-  if (!cloudOn.value || !currentUid) return
-  clearTimeout(writeTimer)
-  writeTimer = setTimeout(() => {
-    void flushUserDoc()
-  }, USER_WRITE_MS)
-}
-
-async function flushUserDoc() {
-  if (!cloudOn.value || !currentUid) return
-  if (flushing) return flushing
-  userDirty = false
-  const payload = buildUserPayload()
-  flushing = setDoc(doc(db, 'users', currentUid), payload, { merge: true })
-    .catch((error) => {
-      userDirty = true
-      reportCloudError(error)
-      toast('Buluta yazılamadı')
-    })
-    .finally(() => {
-      flushing = null
-      if (userDirty) scheduleCloudUser()
-    })
-  return flushing
-}
-
-export function save() {
-  persistLocal()
-  scheduleCloudUser()
-}
-
-async function pushWordDoc(word) {
-  if (!cloudOn.value || !word?.id) return
-  try {
-    await setDoc(doc(db, 'words', word.id), {
-      tr: word.t,
-      en: word.e,
-      pronunciation: word.p || '',
-      sentenceTr: word.c || '',
-      sentenceEn: word.ce || '',
-      createdAt: serverTimestamp(),
-    })
-  } catch (error) {
-    reportCloudError(error)
-    toast('Buluta yazılamadı')
-  }
-}
-
-async function seedCatalog() {
-  const words = defaultWords()
-  const seeded = await runTransaction(db, async (tx) => {
-    const head = await tx.get(doc(db, 'words', notebookDocId(0)))
-    if (head.exists()) return false
-    words.forEach((word, index) => {
-      tx.set(doc(db, 'words', notebookDocId(index)), {
-        tr: word.t,
-        en: word.e,
-        pronunciation: word.p || '',
-        sentenceTr: '',
-        sentenceEn: '',
-        createdAt: serverTimestamp(),
-      })
-    })
-    return true
+  const extras = []
+  const seen = new Set()
+  pending.forEach((op) => {
+    if (op.op !== 'upsert' || deletes.has(op.id) || cloudIds.has(op.id) || seen.has(op.id)) return
+    const entry = presentWord(op)
+    if (!entry.id || !entry.t || !entry.e) return
+    seen.add(entry.id)
+    extras.push(entry)
   })
-  if (seeded) seedRan = true
-  return seeded
+
+  lastCloudIds = [...cloudIds]
+  return [...extras, ...remote.filter((word) => !deletes.has(word.id))]
 }
 
 async function loadWordDocs() {
@@ -271,144 +453,109 @@ function mapWordDoc(snapshot) {
   }
 }
 
-async function loadEvents(uid) {
-  const since = Timestamp.fromMillis(Date.now() - 90 * 24 * 60 * 60 * 1000)
-  const events = []
-  let cursor = null
-  for (let page = 0; page < 8; page += 1) {
-    const parts = [where('at', '>=', since), orderBy('at', 'asc'), limit(300)]
-    if (cursor) parts.push(startAfter(cursor))
-    const snap = await getDocs(query(collection(db, 'users', uid, 'events'), ...parts))
-    snap.docs.forEach((item) => {
-      const data = item.data() || {}
-      const event = {
-        wordId: data.wordId || '',
-        mode: data.mode || 'quiz',
-        at: toMillis(data.at) || Date.now(),
-      }
-      if (typeof data.ok === 'boolean') event.ok = data.ok
-      events.push(event)
+async function seedCatalog() {
+  const seeded = await runTransaction(db, async (tx) => {
+    const head = await tx.get(doc(db, 'words', notebookDocId(0)))
+    if (head.exists()) return false
+    bundled.forEach((word, index) => {
+      tx.set(doc(db, 'words', notebookDocId(index)), {
+        tr: word.t,
+        en: word.e,
+        pronunciation: word.p || '',
+        sentenceTr: '',
+        sentenceEn: '',
+        createdAt: serverTimestamp(),
+      })
     })
-    if (snap.size < 300) break
-    cursor = snap.docs[snap.docs.length - 1]
-  }
-  return events
+    return true
+  })
+  if (seeded) seedRan = true
+  return seeded
 }
 
-function adoptCloud(cloudWords, progress, stars, events, hasUser) {
-  const byId = new Map(cloudWords.map((word) => [word.id, word]))
-  const byTr = new Map(cloudWords.map((word) => [word.t, word]))
-  const missing = []
-
-  const useCloudEvents = hasUser || events.length > 0
-  const keptEvents = useCloudEvents ? events : (state.events || [])
-
-  if (localEdits === 0 && hasUser) {
-    state.w = cloudWords.map((word) => copyCloudWord(word, progress[word.id]))
-    state.st = Number(stars) || 0
-    state.events = keptEvents
-    return missing
+async function commitOp(op) {
+  if (op.op === 'delete') {
+    await deleteDoc(doc(db, 'words', op.id))
+    return
   }
-
-  if (localEdits === 0 && !hasUser) {
-    const localById = new Map(state.w.map((word) => [word.id, word]))
-    const localByTr = new Map(state.w.map((word) => [word.t, word]))
-    state.w = cloudWords.map((word) => {
-      const local = localById.get(word.id) || localByTr.get(word.t)
-      return copyCloudWord(word, local ? { s: local.s, L: local.L, learnedAt: local.learnedAt } : null)
-    })
-    localByTr.forEach((local, turkish) => {
-      if (byTr.has(turkish) || pendingDeletes.has(local.id)) return
-      if (!local.id) local.id = wordDocId(local.t)
-      state.w.unshift(local)
-      missing.push(local)
-    })
-    state.events = keptEvents
-    return missing
-  }
-
-  state.w.forEach((word) => {
-    const remote = byId.get(word.id) || byTr.get(word.t)
-    if (remote) {
-      word.id = remote.id
-      word.e = remote.e
-      word.p = remote.p || word.p || ''
-      if (remote.c) word.c = remote.c
-      if (remote.ce) word.ce = remote.ce
-      return
-    }
-    if (!word.id && word.t) word.id = wordDocId(word.t)
-    if (word.t && !pendingDeletes.has(word.id)) missing.push(word)
-  })
-  const have = new Set(state.w.map((word) => word.t))
-  cloudWords.forEach((remote) => {
-    if (have.has(remote.t) || pendingDeletes.has(remote.id)) return
-    state.w.push(copyCloudWord(remote, hasUser ? progress[remote.id] : null))
-  })
-  state.events = keptEvents
-  return missing
+  await setDoc(doc(db, 'words', op.id), {
+    tr: op.t,
+    en: op.e,
+    pronunciation: op.p || '',
+    sentenceTr: op.c || '',
+    sentenceEn: op.ce || '',
+    createdAt: serverTimestamp(),
+  }, { merge: true })
 }
 
-async function bootOnce() {
-  const editsAtStart = localEdits
-  try {
+async function flushPending() {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return false
+  if (flushing) return flushing
+  flushing = (async () => {
     try {
-      const cred = await signInAnonymously(auth)
-      currentUid = cred.user.uid
-    } catch (error) {
-      reportCloudError(error)
-    }
-    let docs = await loadWordDocs()
-    if (!docs.length) {
-      await seedCatalog()
-      docs = await loadWordDocs()
-    }
-    const cloudWords = docs.map(mapWordDoc).filter(Boolean)
-    if (!cloudWords.length) throw new Error('Kelime listesi boş')
-
-    let userData = null
-    let events = []
-    let historyFailed = false
-    if (currentUid) {
-      const userSnap = await getDoc(doc(db, 'users', currentUid))
-      userData = userSnap.exists() ? userSnap.data() || {} : null
-      try {
-        events = await loadEvents(currentUid)
-      } catch (error) {
-        historyFailed = true
-        reportCloudError(error)
-        toast('Geçmiş alınamadı')
-        events = Array.isArray(state.events) ? state.events.slice() : []
+      while (pending.length) {
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) return false
+        const op = pending[0]
+        await commitOp(op)
+        if (pending[0] === op) pending.shift()
+        else pending = pending.filter((item) => item !== op)
+        persistPending()
       }
+      return true
+    } catch (error) {
+      console.warn(error)
+      return false
     }
+  })()
+  try {
+    return await flushing
+  } finally {
+    flushing = null
+  }
+}
 
-    const progress = userData?.progress || {}
-    const missing = adoptCloud(cloudWords, progress, userData?.stars, events, !!userData)
-    cloudOn.value = true
-    if (currentUid && !historyFailed) {
+async function refreshCatalog() {
+  if (refreshFlight) return refreshFlight
+  refreshFlight = (async () => {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        const offline = new Error('offline')
+        offline.code = 'offline'
+        throw offline
+      }
+      let docs = await loadWordDocs()
+      if (!docs.length) {
+        await seedCatalog()
+        docs = await loadWordDocs()
+      }
+      const cloudWords = docs.map(mapWordDoc).filter(Boolean)
+      if (!cloudWords.length) throw new Error('Kelime listesi boş')
+      const merged = mergeCloud(cloudWords)
+      catalogSource = 'cloud'
+      replaceWords(merged)
+      persistAll()
+      cloudOn.value = true
       lastCloudError = ''
       cloudError.value = ''
+      try {
+        await flushPending()
+      } catch (error) {
+        console.warn(error)
+      }
+    } catch (error) {
+      cloudOn.value = false
+      if (!hasCatalogCache && !downloadToastShown) {
+        downloadToastShown = true
+        reportCloudError(error)
+        toast('Kelimeler indirilemedi')
+      }
     }
-    if (!currentUid) toast('Giriş kapalı, puanlar bu cihazda')
-    persistLocal()
-    for (const word of missing) {
-      if (!pendingDeletes.has(word.id)) await pushWordDoc(word)
-    }
-    for (const id of pendingDeletes) {
-      await deleteCloudWord(id)
-    }
-    pendingDeletes.clear()
-    if (!userData || localEdits !== editsAtStart || userDirty) scheduleCloudUser()
-  } catch (error) {
-    cloudOn.value = false
-    reportCloudError(error)
-    toast('Bulut açılamadı')
+  })()
+  try {
+    return await refreshFlight
+  } finally {
+    refreshFlight = null
   }
-}
-
-function boot() {
-  if (!bootPromise) bootPromise = bootOnce()
-  return bootPromise
 }
 
 export function toast(message) {
@@ -468,7 +615,7 @@ export function need(count) {
   return true
 }
 
-async function appendEvent(word, mode, ok) {
+function appendEvent(word, mode, ok) {
   const event = {
     wordId: word.id || '',
     mode,
@@ -477,24 +624,10 @@ async function appendEvent(word, mode, ok) {
   if (typeof ok === 'boolean') event.ok = ok
   if (!Array.isArray(state.events)) state.events = []
   state.events.push(event)
-  persistLocal()
-  if (!cloudOn.value || !currentUid || !word.id) return
-  const payload = {
-    wordId: word.id,
-    mode,
-    at: serverTimestamp(),
-  }
-  if (typeof ok === 'boolean') payload.ok = ok
-  try {
-    await addDoc(collection(db, 'users', currentUid, 'events'), payload)
-  } catch (error) {
-    reportCloudError(error)
-    toast('Buluta yazılamadı')
-  }
+  persistProgress()
 }
 
 export function mark(word, ok, mode) {
-  localEdits += 1
   if (ok) {
     word.s = Math.min(5, word.s + 1)
     state.st += 1
@@ -506,57 +639,52 @@ export function mark(word, ok, mode) {
   } else {
     word.s = Math.max(-3, word.s - 1)
   }
+  remember(word)
   save()
-  if (mode) void appendEvent(word, mode, ok)
+  if (mode) appendEvent(word, mode, ok)
 }
 
-export function addCatalogWord(fields) {
-  localEdits += 1
-  const word = {
+export function save() {
+  persistProgress()
+}
+
+export async function addCatalogWord(fields) {
+  const entry = presentWord({
     id: wordDocId(fields.t),
     t: fields.t,
     e: fields.e,
     p: '',
     c: fields.c || '',
     ce: fields.ce || '',
-    s: 0,
-    L: 0,
-    learnedAt: null,
-  }
+  })
+  const word = viewWord(entry)
+  word.s = 0
+  word.L = 0
+  word.learnedAt = null
+  scores[word.id] = { s: 0, L: 0, learnedAt: null }
   state.w.unshift(word)
-  save()
-  void pushWordDoc(word)
-  return word
-}
-
-async function deleteCloudWord(id) {
-  if (!cloudOn.value || !currentUid || !id) {
-    if (id) pendingDeletes.add(id)
-    return
-  }
+  queueUpsert(word)
+  if (catalogSource === 'bundle') catalogSource = 'device'
+  persistAll()
   try {
-    await deleteDoc(doc(db, 'words', id))
-    try {
-      await updateDoc(doc(db, 'users', currentUid), {
-        [`progress.${id}`]: deleteField(),
-      })
-    } catch (error) {
-      if (error?.code !== 'not-found') throw error
-    }
-  } catch (error) {
-    reportCloudError(error)
-    toast('Buluta yazılamadı')
+    const flushed = await flushPending()
+    return flushed && !pending.some((op) => op.id === word.id)
+  } catch {
+    return false
   }
 }
 
 export async function removeCatalogWord(word) {
-  localEdits += 1
   const index = state.w.indexOf(word)
   if (index >= 0) state.w.splice(index, 1)
-  if (word?.id) pendingDeletes.add(word.id)
-  save()
-  await deleteCloudWord(word?.id)
-  pendingDeletes.delete(word?.id)
+  if (word?.id) queueDelete(word.id)
+  if (catalogSource === 'bundle') catalogSource = 'device'
+  persistAll()
+  try {
+    await flushPending()
+  } catch {
+    /* silme kuyrukta durur, kelime cihazda kalkmış kalır */
+  }
 }
 
 export function startCards() {
@@ -602,27 +730,30 @@ export function choicesFor(word) {
   return shuffle([word, ...others])
 }
 
-persistLocal()
-
 if (typeof window !== 'undefined') {
-  void boot()
+  void refreshCatalog()
+  window.addEventListener('online', () => {
+    void refreshCatalog()
+  })
   window.addEventListener('pagehide', () => {
-    void flushUserDoc()
+    void flushPending()
   })
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') void flushUserDoc()
+    if (document.visibilityState === 'hidden') void flushPending()
   })
-  if (import.meta.env.DEV) {
+  if (import.meta.env?.DEV) {
     window.__kmCloud = {
       status() {
         return {
           on: cloudOn.value,
           seeded: seedRan,
           error: lastCloudError,
-          uid: currentUid,
           words: state.w.length,
           events: (state.events || []).length,
           stars: state.st,
+          pending: pending.length,
+          cached: hasCatalogCache,
+          source: catalogSource,
         }
       },
     }

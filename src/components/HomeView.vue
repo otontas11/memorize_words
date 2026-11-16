@@ -1,10 +1,47 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { cloudOn, lastCloudError, startCards, startDrag, startFill, startQuiz, startStats, startWords, startWrite, state } from '../composables/useStore'
 import ProgressBar from './ProgressBar.vue'
 
 const total = computed(() => state.w.length)
 const learned = computed(() => state.w.filter((word) => word.L).length)
+const standalone = ref(false)
+const ios = ref(false)
+let promptEvent = null
+
+function onBeforeInstall(event) {
+  event.preventDefault()
+  promptEvent = event
+}
+
+function onInstalled() {
+  promptEvent = null
+  standalone.value = true
+}
+
+onMounted(() => {
+  standalone.value = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
+  const ua = navigator.userAgent || ''
+  ios.value = /iphone|ipad|ipod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  window.addEventListener('beforeinstallprompt', onBeforeInstall)
+  window.addEventListener('appinstalled', onInstalled)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeinstallprompt', onBeforeInstall)
+  window.removeEventListener('appinstalled', onInstalled)
+})
+
+async function install() {
+  if (!promptEvent) return
+  promptEvent.prompt()
+  try {
+    await promptEvent.userChoice
+  } catch {
+    /* kullanıcı pencereyi kapattıysa oyun açık kalır */
+  }
+  promptEvent = null
+}
 </script>
 
 <template>
@@ -29,4 +66,6 @@ const learned = computed(() => state.w.filter((word) => word.L).length)
     <button class="tile t6" type="button" @click="startWords()"><span>📚</span>Kelimelerim / Yeni kelime ekle</button>
     <button class="tile t7" type="button" @click="startStats()"><span>📊</span>İstatistik</button>
   </div>
+  <button v-if="!standalone" class="btn" type="button" @click="install">📲 Yükle</button>
+  <p v-if="!standalone && ios" class="note">Paylaş düğmesine bas, sonra "Ana Ekrana Ekle".</p>
 </template>

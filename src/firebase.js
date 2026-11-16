@@ -1,6 +1,5 @@
 import { getAnalytics } from 'firebase/analytics'
 import { getApps, getApp, initializeApp } from 'firebase/app'
-import { getAuth } from 'firebase/auth'
 import { getFirestore } from 'firebase/firestore'
 
 const firebaseConfig = {
@@ -17,10 +16,10 @@ export const firebaseApp = getApps().length ? getApp() : initializeApp(firebaseC
 
 export let analytics = null
 try {
-  analytics = getAnalytics(firebaseApp)
+  const offline = typeof navigator !== 'undefined' && navigator.onLine === false
+  if (!offline) analytics = getAnalytics(firebaseApp)
 } catch {
   analytics = null
 }
 
-export const auth = getAuth(firebaseApp)
 export const db = getFirestore(firebaseApp)

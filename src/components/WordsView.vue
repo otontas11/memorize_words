@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { addCatalogWord, cloudOn, removeCatalogWord, say, state, tl, toast } from '../composables/useStore'
+import { addCatalogWord, removeCatalogWord, say, state, tl, toast } from '../composables/useStore'
 import TopBar from './TopBar.vue'
 
 const turkish = ref('')
@@ -35,7 +35,7 @@ async function add() {
   }
   saving.value = true
   try {
-    await addCatalogWord({
+    const synced = await addCatalogWord({
       t,
       e,
       p: '',
@@ -46,9 +46,7 @@ async function add() {
     english.value = ''
     sentence.value = ''
     sentenceEn.value = ''
-    toast(cloudOn.value ? `Eklendi: ${t} ✅` : `Eklendi: ${t} (bu cihazda)`)
-  } catch {
-    toast('Kelime buluta yazılamadı')
+    toast(synced ? `Eklendi: ${t} ✅` : `Eklendi: ${t} (bu cihazda)`)
   } finally {
     saving.value = false
   }
@@ -64,8 +62,6 @@ async function remove(word) {
   saving.value = true
   try {
     await removeCatalogWord(word)
-  } catch {
-    toast('Kelime silinemedi')
   } finally {
     saving.value = false
   }
