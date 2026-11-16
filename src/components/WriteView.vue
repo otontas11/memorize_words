@@ -35,7 +35,7 @@ function check() {
   const ok = tl(answer.value) === tl(word.t)
   session.lastOk = ok
   if (ok) session.correct += 1
-  mark(word, ok)
+  mark(word, ok, 'write')
   say(word.t)
   session.phase = 'result'
   later(() => {

@@ -53,7 +53,7 @@ function choose(index) {
   const ok = session.options[index] === word
   session.answer = index
   if (ok) session.correct += 1
-  mark(word, ok)
+  mark(word, ok, 'fill')
   say(word.c.replace('___', word.t))
   later(() => {
     session.index += 1

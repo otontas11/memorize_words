@@ -8,6 +8,7 @@ import WriteView from './components/WriteView.vue'
 import DragView from './components/DragView.vue'
 import FillView from './components/FillView.vue'
 import WordsView from './components/WordsView.vue'
+import StatsView from './components/StatsView.vue'
 
 watch(screen, () => window.scrollTo(0, 0))
 </script>
@@ -20,5 +21,6 @@ watch(screen, () => window.scrollTo(0, 0))
   <DragView v-else-if="screen === 'dnd'" />
   <FillView v-else-if="screen === 'fill'" />
   <WordsView v-else-if="screen === 'words'" />
+  <StatsView v-else-if="screen === 'stats'" />
   <div v-if="toastText" class="toast">{{ toastText }}</div>
 </template>

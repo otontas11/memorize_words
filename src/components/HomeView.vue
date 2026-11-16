@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { startCards, startDrag, startFill, startQuiz, startWords, startWrite, state } from '../composables/useStore'
+import { cloudOn, lastCloudError, startCards, startDrag, startFill, startQuiz, startStats, startWords, startWrite, state } from '../composables/useStore'
 import ProgressBar from './ProgressBar.vue'
 
 const total = computed(() => state.w.length)
@@ -9,7 +9,7 @@ const learned = computed(() => state.w.filter((word) => word.L).length)
 
 <template>
   <div class="top">
-    <div class="badge">💾 Bu cihazda</div>
+    <div class="badge" :data-cloud="cloudOn ? 'bulutta' : 'cihaz'" :data-cloud-error="lastCloudError">{{ cloudOn ? '☁️ Bulutta' : '💾 Bu cihazda' }}</div>
     <div class="badge">⭐ {{ state.st }}</div>
   </div>
   <h1>Kelime Macerası</h1>
@@ -27,5 +27,6 @@ const learned = computed(() => state.w.filter((word) => word.L).length)
     <button class="tile t4" type="button" @click="startWrite()"><span>✍️</span>Yazarak</button>
     <button class="tile t1" type="button" @click="startFill()"><span>📝</span>Cümle tamamla</button>
     <button class="tile t6" type="button" @click="startWords()"><span>📚</span>Kelimelerim / Yeni kelime ekle</button>
+    <button class="tile t7" type="button" @click="startStats()"><span>📊</span>İstatistik</button>
   </div>
 </template>

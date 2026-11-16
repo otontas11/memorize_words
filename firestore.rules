@@ -1,0 +1,38 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function validString(value, max) {
+      return value is string && value.size() <= max;
+    }
+
+    function validWord() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['tr', 'en'])
+        && validString(data.tr, 80)
+        && data.tr.size() > 0
+        && validString(data.en, 80)
+        && data.en.size() > 0
+        && (!data.keys().hasAny(['pronunciation']) || validString(data.pronunciation, 80))
+        && (!data.keys().hasAny(['sentenceTr']) || validString(data.sentenceTr, 200))
+        && (!data.keys().hasAny(['sentenceEn']) || validString(data.sentenceEn, 200));
+    }
+
+    match /words/{wordId} {
+      allow read: if true;
+      allow create, update: if validWord();
+      allow delete: if true;
+    }
+
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+
+      match /events/{eventId} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

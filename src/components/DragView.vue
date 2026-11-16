@@ -36,7 +36,7 @@ function drop(word, index) {
   if (!target || game.done.includes(target)) return
   if (target === word) {
     game.done.push(word)
-    if (!game.erred[word.t]) mark(word, true)
+    if (!game.erred[word.t]) mark(word, true, 'drag')
     say(word.t)
     game.bad = -1
     if (game.done.length === game.targets.length) {
@@ -49,7 +49,7 @@ function drop(word, index) {
   }
   if (!game.erred[word.t]) {
     game.erred[word.t] = 1
-    mark(word, false)
+    mark(word, false, 'drag')
   }
   game.bad = index
   game.selected = null
