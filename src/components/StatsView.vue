@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { state } from '../composables/useStore'
+import { formatPoints, state } from '../composables/useStore'
 import { buildStats } from '../composables/useStats'
 import ProgressBar from './ProgressBar.vue'
 import TopBar from './TopBar.vue'
@@ -26,7 +26,7 @@ const stats = computed(() => buildStats(state.w, state.events, state.st))
         <small>Hiç çalışılmamış</small>
       </div>
       <div>
-        <b>⭐ {{ stats.stars }}</b>
+        <b>⭐ {{ formatPoints(stats.stars) }}</b>
         <small>Yıldız</small>
       </div>
       <div>
@@ -91,7 +91,7 @@ const stats = computed(() => buildStats(state.w, state.events, state.st))
       <p v-if="!stats.hardest.length" class="note">Henüz yok</p>
       <div v-for="word in stats.hardest" :key="word.id" class="stat-row">
         <span>{{ word.label }}</span>
-        <b>Puan {{ word.score }}</b>
+        <b>Puan {{ formatPoints(word.score) }}</b>
       </div>
     </div>
 
@@ -125,7 +125,7 @@ const stats = computed(() => buildStats(state.w, state.events, state.st))
       <p v-if="!stats.hardest.length" class="note">Henüz yok</p>
       <div v-for="word in stats.hardest" :key="word.id" class="stat-row">
         <span>{{ word.label }}</span>
-        <b>Puan {{ word.score }}</b>
+        <b>Puan {{ formatPoints(word.score) }}</b>
       </div>
     </div>
     <div class="card summary left">

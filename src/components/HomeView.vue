@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { cloudOn, lastCloudError, startCards, startDrag, startFill, startQuiz, startStats, startWords, startWrite, state } from '../composables/useStore'
+import { cloudOn, formatPoints, lastCloudError, startCards, startDrag, startFill, startQuiz, startStats, startWords, startWrite, state } from '../composables/useStore'
 import ProgressBar from './ProgressBar.vue'
 
 const total = computed(() => state.w.length)
@@ -47,7 +47,7 @@ async function install() {
 <template>
   <div class="top">
     <div class="badge" :data-cloud="cloudOn ? 'bulutta' : 'cihaz'" :data-cloud-error="lastCloudError">{{ cloudOn ? '☁️ Bulutta' : '💾 Bu cihazda' }}</div>
-    <div class="badge">⭐ {{ state.st }}</div>
+    <div class="badge">⭐ {{ formatPoints(state.st) }}</div>
   </div>
   <h1>Kelime Macerası</h1>
   <p class="sub">Türkçe kelimeleri öğren! 🇹🇷</p>

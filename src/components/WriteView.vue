@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { mark, pick, say, tl } from '../composables/useStore'
 import EndScreen from './EndScreen.vue'
 import ProgressBar from './ProgressBar.vue'
@@ -7,7 +7,6 @@ import TopBar from './TopBar.vue'
 
 const inputEl = ref(null)
 const answer = ref('')
-const timers = []
 
 const session = reactive({
   queue: pick(8),
@@ -24,10 +23,6 @@ function focus() {
   inputEl.value?.focus()
 }
 
-function later(fn, ms) {
-  timers.push(setTimeout(fn, ms))
-}
-
 function check() {
   if (session.phase !== 'ask' || session.finished) return
   const word = current.value
@@ -37,13 +32,16 @@ function check() {
   if (ok) session.correct += 1
   mark(word, ok, 'write')
   say(word.t)
+  inputEl.value?.blur()
   session.phase = 'result'
-  later(() => {
-    session.index += 1
-    answer.value = ''
-    if (session.index >= session.queue.length) session.finished = true
-    else session.phase = 'ask'
-  }, 1400)
+}
+
+function next() {
+  if (session.phase !== 'result' || session.finished) return
+  session.index += 1
+  answer.value = ''
+  if (session.index >= session.queue.length) session.finished = true
+  else session.phase = 'ask'
 }
 
 function restart() {
@@ -65,7 +63,6 @@ watch(
 )
 
 onMounted(() => nextTick(focus))
-onBeforeUnmount(() => timers.forEach(clearTimeout))
 </script>
 
 <template>
@@ -84,6 +81,7 @@ onBeforeUnmount(() => timers.forEach(clearTimeout))
       <p v-if="current.p" class="okunus">Okunuş: {{ current.p }}</p>
       <p class="sub">{{ session.lastOk ? 'Doğru! +1 puan' : 'Doğrusu bu. −1 puan' }}</p>
     </div>
+    <button class="btn g" type="button" @click="next" @keydown.enter.prevent>Sıradaki ➜</button>
   </template>
   <template v-else>
     <TopBar />
@@ -98,7 +96,7 @@ onBeforeUnmount(() => timers.forEach(clearTimeout))
       autocomplete="off"
       autocapitalize="none"
       placeholder="Türkçe kelime…"
-      @keydown.enter="check"
+      @keydown.enter.prevent="check"
     />
     <button class="btn g" type="button" @click="check">Kontrol et ✅</button>
     <button class="btn y" type="button" @click="say(current.t)">🔊 İpucu (dinle)</button>

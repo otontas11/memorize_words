@@ -1,17 +1,18 @@
 <script setup>
-import { computed, onBeforeUnmount, reactive } from 'vue'
-import { choicesFor, mark, pick, quizDir, say } from '../composables/useStore'
+import { computed, reactive } from 'vue'
+import { awardQuiz, buzz, choicesFor, pick, quizDir, say } from '../composables/useStore'
 import EndScreen from './EndScreen.vue'
 import ProgressBar from './ProgressBar.vue'
 import TopBar from './TopBar.vue'
 
-const timers = []
+const QUIZ_GAINS = [1, 0.5, 0.25, 0]
 
 const session = reactive({
   queue: pick(10),
   index: 0,
   correct: 0,
   answer: null,
+  missed: [],
   options: null,
   finished: false,
 })
@@ -28,24 +29,29 @@ function prepare() {
   if (!session.options) session.options = choicesFor(word)
 }
 
-function later(fn, ms) {
-  timers.push(setTimeout(fn, ms))
-}
-
 function choose(index) {
-  if (session.answer !== null || session.finished) return
+  if (session.answer !== null || session.finished || session.missed.includes(index)) return
   const word = current.value
   const ok = session.options[index] === word
+  if (!ok) {
+    session.missed.push(index)
+    buzz()
+    return
+  }
+  const gain = QUIZ_GAINS[Math.min(session.missed.length, QUIZ_GAINS.length - 1)]
   session.answer = index
-  if (ok) session.correct += 1
-  mark(word, ok, 'quiz')
+  if (gain === 1) session.correct += 1
+  awardQuiz(word, gain)
   say(word.t)
-  later(() => {
-    session.index += 1
-    session.answer = null
-    session.options = null
-    prepare()
-  }, 1100)
+}
+
+function next() {
+  if (session.answer === null || session.finished) return
+  session.index += 1
+  session.answer = null
+  session.missed = []
+  session.options = null
+  prepare()
 }
 
 function restart() {
@@ -53,14 +59,13 @@ function restart() {
   session.index = 0
   session.correct = 0
   session.answer = null
+  session.missed = []
   session.options = null
   session.finished = false
   prepare()
 }
 
 prepare()
-
-onBeforeUnmount(() => timers.forEach(clearTimeout))
 </script>
 
 <template>
@@ -78,14 +83,14 @@ onBeforeUnmount(() => timers.forEach(clearTimeout))
       <div class="q">{{ askingTurkish ? current.t : current.e }}</div>
       <p v-if="session.answer !== null && !askingTurkish && current.p" class="okunus">Okunuş: {{ current.p }}</p>
     </div>
-    <div class="opts">
+    <div class="opts" :class="{ locked: session.answer !== null }">
       <button
         v-for="(option, index) in session.options"
         :key="option.t"
         class="opt"
         :class="{
           ok: session.answer !== null && option === current,
-          no: session.answer === index && option !== current,
+          no: session.missed.includes(index),
         }"
         type="button"
         @click="choose(index)"
@@ -94,5 +99,12 @@ onBeforeUnmount(() => timers.forEach(clearTimeout))
         <small v-if="session.answer !== null && askingTurkish && option === current && option.p">Okunuş: {{ option.p }}</small>
       </button>
     </div>
+    <button
+      v-if="session.answer !== null"
+      class="btn g"
+      type="button"
+      @click="next"
+      @keydown.enter.prevent
+    >Sıradaki ➜</button>
   </template>
 </template>

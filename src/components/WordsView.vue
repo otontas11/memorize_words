@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { addCatalogWord, removeCatalogWord, say, state, tl, toast } from '../composables/useStore'
+import { addCatalogWord, formatPoints, removeCatalogWord, say, state, tl, toast } from '../composables/useStore'
 import TopBar from './TopBar.vue'
 
 const turkish = ref('')
@@ -88,7 +88,7 @@ async function remove(word) {
 
   <p class="sub gap">Öğreniyorum ({{ learning.length }})</p>
   <div v-for="word in learning" :key="word.id || word.t" class="li">
-    <b>{{ word.t }} = {{ word.e }}<small v-if="word.p">Okunuş: {{ word.p }}</small><small>Puan: {{ word.s }} / 5</small></b>
+    <b>{{ word.t }} = {{ word.e }}<small v-if="word.p">Okunuş: {{ word.p }}</small><small>Puan: {{ formatPoints(word.s) }} / 5</small></b>
     <button type="button" @click="say(word.t)">🔊</button>
     <button type="button" @click="remove(word)">🗑️</button>
   </div>

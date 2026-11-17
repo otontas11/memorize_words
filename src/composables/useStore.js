@@ -9,9 +9,10 @@ import {
   runTransaction,
   serverTimestamp,
   setDoc,
+  updateDoc,
 } from 'firebase/firestore'
 import { db } from '../firebase'
-import { SENTENCES, defaultWords } from '../data/words'
+import { SENTENCES, bundledSentencePatch, defaultWords } from '../data/words'
 
 const PROGRESS_KEY = 'km-tr-en-v5'
 const CATALOG_KEY = 'km-catalog-v1'
@@ -76,10 +77,11 @@ function presentWord(word) {
     c: word.c || '',
     ce: word.ce || '',
   }
-  const sentence = SENTENCES[entry.t]
+  const sentence = bundledSentence(entry.t)
   if (sentence && !entry.c) {
-    entry.c = sentence[0] || ''
-    entry.ce = sentence[1] || ''
+    entry.c = sentence[0]
+    entry.ce = sentence[1]
+    if (entry.id) sentenceGaps.add(entry.id)
   }
   if (!entry.p) {
     const exact = byPair.get(`${entry.t}\0${entry.e}`)
@@ -128,6 +130,11 @@ function normalizePending(raw) {
       ops.push({ op: 'delete', id: op.id })
       return
     }
+    if (op.op === 'sentences') {
+      if (typeof op.c !== 'string') return
+      ops.push({ op: 'sentences', id: op.id, c: op.c, ce: op.ce || '' })
+      return
+    }
     if (op.op !== 'upsert' || !op.t || !op.e) return
     ops.push({
       op: 'upsert',
@@ -168,7 +175,28 @@ function overlayPending(words) {
     seen.add(entry.id)
     extras.push(entry)
   })
-  return [...extras, ...base]
+  const patched = [...extras, ...base]
+  const sentenceOps = pending.filter((op) => op.op === 'sentences')
+  if (sentenceOps.length) {
+    const byId = new Map(sentenceOps.map((op) => [op.id, op]))
+    patched.forEach((word) => {
+      const op = byId.get(word.id)
+      if (op && !word.c) {
+        word.c = op.c
+        word.ce = op.ce || ''
+      }
+    })
+  }
+  return patched
+}
+
+const sentenceGaps = new Set()
+const sentenceFixes = new Set()
+
+function bundledSentence(turkish) {
+  const sentence = SENTENCES[turkish]
+  if (!sentence || !sentence[0]) return null
+  return [sentence[0], sentence[1] || '']
 }
 
 let scores = {}
@@ -329,7 +357,11 @@ function persistAll() {
   return catalogOk
 }
 
-if (hasCatalogCache) persistAll()
+const hadCatalogAtBoot = hasCatalogCache
+const filledSentences = sentenceGaps.size > 0
+const patchedSentences = applyBundledSentencePatches()
+if (typeof navigator !== 'undefined' && navigator.onLine === false) queueSentenceGaps()
+if (hasCatalogCache || filledSentences || patchedSentences) persistAll()
 
 function reportCloudError(error) {
   const code = error?.code || 'error'
@@ -365,6 +397,70 @@ function queueUpsert(word) {
 function queueDelete(id) {
   pending = pending.filter((op) => op.id !== id)
   pending.push({ op: 'delete', id })
+}
+
+function queueSentence(id, c, ce, { force = false, clear = false } = {}) {
+  if (!id) return
+  if (!c && !clear) return
+  const current = pending.find((op) => op.id === id)
+  if (current?.op === 'delete') return
+  if (current?.op === 'upsert') {
+    if (force || clear || !current.c) {
+      current.c = c || ''
+      current.ce = ce || ''
+    }
+    return
+  }
+  if (current?.op === 'sentences') {
+    current.c = c || ''
+    current.ce = ce || ''
+    return
+  }
+  pending.push({ op: 'sentences', id, c: c || '', ce: ce || '' })
+}
+
+function queueSentenceGaps() {
+  if (!sentenceGaps.size) return false
+  const ids = [...sentenceGaps]
+  sentenceGaps.clear()
+  let queued = false
+  ids.forEach((id) => {
+    const word = state.w.find((item) => item.id === id)
+    if (!word?.c) return
+    queueSentence(word.id, word.c, word.ce || '')
+    queued = true
+  })
+  if (queued && catalogSource === 'bundle') catalogSource = 'device'
+  return queued
+}
+
+function queueSentenceFixes() {
+  if (!sentenceFixes.size) return false
+  const ids = [...sentenceFixes]
+  sentenceFixes.clear()
+  let queued = false
+  ids.forEach((id) => {
+    const word = state.w.find((item) => item.id === id)
+    if (!word) return
+    queueSentence(word.id, word.c || '', word.ce || '', { force: true, clear: !word.c })
+    queued = true
+  })
+  if (queued && catalogSource === 'bundle') catalogSource = 'device'
+  return queued
+}
+
+function applyBundledSentencePatches() {
+  let changed = false
+  state.w.forEach((word) => {
+    const patch = bundledSentencePatch(word.t, word.c, word.ce)
+    if (!patch) return
+    word.c = patch.c
+    word.ce = patch.ce
+    sentenceFixes.add(word.id)
+    changed = true
+  })
+  if (changed) queueSentenceFixes()
+  return changed
 }
 
 function replaceWords(entries) {
@@ -478,6 +574,13 @@ async function commitOp(op) {
     await deleteDoc(doc(db, 'words', op.id))
     return
   }
+  if (op.op === 'sentences') {
+    await updateDoc(doc(db, 'words', op.id), {
+      sentenceTr: op.c || '',
+      sentenceEn: op.ce || '',
+    })
+    return
+  }
   await setDoc(doc(db, 'words', op.id), {
     tr: op.t,
     en: op.e,
@@ -530,9 +633,39 @@ async function refreshCatalog() {
       }
       const cloudWords = docs.map(mapWordDoc).filter(Boolean)
       if (!cloudWords.length) throw new Error('Kelime listesi boş')
+      const cleared = new Set()
+      cloudWords.forEach((word) => {
+        if (!word.id) return
+        const patch = bundledSentencePatch(word.t, word.c, word.ce)
+        if (patch) {
+          word.c = patch.c
+          word.ce = patch.ce
+          if (!patch.c) cleared.add(word.id)
+          sentenceFixes.add(word.id)
+          return
+        }
+        if (word.c) {
+          sentenceGaps.delete(word.id)
+          pending = pending.filter((op) => !(op.op === 'sentences' && op.id === word.id))
+          return
+        }
+        const sentence = bundledSentence(word.t)
+        if (!sentence) return
+        word.c = sentence[0]
+        word.ce = sentence[1]
+        sentenceGaps.add(word.id)
+      })
       const merged = mergeCloud(cloudWords)
       catalogSource = 'cloud'
       replaceWords(merged)
+      cleared.forEach((id) => {
+        const word = state.w.find((item) => item.id === id)
+        if (!word) return
+        word.c = ''
+        word.ce = ''
+      })
+      queueSentenceFixes()
+      queueSentenceGaps()
       persistAll()
       cloudOn.value = true
       lastCloudError = ''
@@ -544,7 +677,8 @@ async function refreshCatalog() {
       }
     } catch (error) {
       cloudOn.value = false
-      if (!hasCatalogCache && !downloadToastShown) {
+      if (queueSentenceGaps()) persistAll()
+      if (!hadCatalogAtBoot && !downloadToastShown) {
         downloadToastShown = true
         reportCloudError(error)
         toast('Kelimeler indirilemedi')
@@ -627,21 +761,57 @@ function appendEvent(word, mode, ok) {
   persistProgress()
 }
 
+export function roundPoints(value) {
+  return Math.round((Number(value) || 0) * 100) / 100
+}
+
+export function formatPoints(value) {
+  const n = roundPoints(value)
+  if (Number.isInteger(n)) return String(n)
+  return n.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
+}
+
+export function buzz() {
+  try {
+    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      navigator.vibrate(200)
+    }
+  } catch {
+    /* titreşim yoksa oyun devam eder */
+  }
+}
+
 export function mark(word, ok, mode) {
   if (ok) {
-    word.s = Math.min(5, word.s + 1)
-    state.st += 1
+    word.s = Math.min(5, roundPoints(word.s + 1))
+    state.st = roundPoints(state.st + 1)
     if (word.s >= 5 && !word.L) {
       word.L = 1
       word.learnedAt = Date.now()
       toast(`🎓 Öğrenildi: ${word.t}`)
     }
   } else {
-    word.s = Math.max(-3, word.s - 1)
+    word.s = Math.max(-3, roundPoints(word.s - 1))
   }
   remember(word)
   save()
   if (mode) appendEvent(word, mode, ok)
+}
+
+export function awardQuiz(word, points) {
+  const gain = roundPoints(points)
+  if (gain > 0) {
+    word.s = Math.min(5, roundPoints((Number(word.s) || 0) + gain))
+    state.st = roundPoints((Number(state.st) || 0) + gain)
+    if (word.s >= 5 && !word.L) {
+      word.L = 1
+      word.learnedAt = Date.now()
+      toast(`🎓 Öğrenildi: ${word.t}`)
+    }
+  }
+  remember(word)
+  save()
+  appendEvent(word, 'quiz', gain === 1)
 }
 
 export function save() {

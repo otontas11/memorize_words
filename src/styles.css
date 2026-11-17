@@ -277,6 +277,11 @@ h1 {
   border-color: var(--r);
   color: #fff;
   animation: sh 0.3s;
+  pointer-events: none;
+}
+
+.opts.locked .opt {
+  pointer-events: none;
 }
 
 @keyframes sh {
@@ -489,4 +494,98 @@ input {
   width: 100%;
   background: var(--p);
   border-radius: 8px 8px 0 0;
+}
+
+html.drag-lock,
+html.drag-lock body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+html.drag-lock .drag-screen {
+  position: fixed;
+  z-index: 5;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(480px, 100%);
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding:
+    calc(10px + env(safe-area-inset-top, 0px))
+    16px
+    calc(10px + env(safe-area-inset-bottom, 0px));
+  background: var(--bg);
+  overflow: hidden;
+  touch-action: none;
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+html.drag-lock .drag-screen .top,
+html.drag-lock .drag-screen .bar,
+html.drag-lock .drag-screen .hint,
+html.drag-lock .drag-screen .tray,
+html.drag-lock .drag-screen .btn {
+  flex: 0 0 auto;
+}
+
+html.drag-lock .drag-screen .btn {
+  margin-top: 8px;
+  touch-action: manipulation;
+}
+
+html.drag-lock .drag-screen .top {
+  margin-bottom: 6px;
+}
+
+html.drag-lock .drag-screen .hint {
+  margin: 6px 0;
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+html.drag-lock .drag-screen .zones {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+html.drag-lock .drag-screen .zone {
+  flex: 1 1 0;
+  min-height: 0;
+  margin: 0;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1.2;
+  overflow: hidden;
+}
+
+html.drag-lock .drag-screen .zone b {
+  font-size: clamp(17px, 4.6vw, 24px);
+  line-height: 1.15;
+}
+
+html.drag-lock .drag-screen .zone .okunus {
+  margin: 2px 0 0;
+  font-size: 14px;
+}
+
+html.drag-lock .drag-screen .tray {
+  margin-top: 8px;
+  min-height: 0;
+}
+
+html.drag-lock .drag-screen .chip2 {
+  font-size: 20px;
+  padding: 10px 14px;
 }

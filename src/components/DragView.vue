@@ -1,6 +1,6 @@
 <script setup>
-import { onBeforeUnmount, reactive } from 'vue'
-import { mark, pick, say, shuffle, toast } from '../composables/useStore'
+import { onBeforeUnmount, reactive, watch } from 'vue'
+import { buzz, mark, pick, say, shuffle, toast } from '../composables/useStore'
 import EndScreen from './EndScreen.vue'
 import ProgressBar from './ProgressBar.vue'
 import TopBar from './TopBar.vue'
@@ -41,9 +41,6 @@ function drop(word, index) {
     game.bad = -1
     if (game.done.length === game.targets.length) {
       game.correct = game.targets.length - Object.keys(game.erred).length
-      later(() => {
-        game.finished = true
-      }, 900)
     }
     return
   }
@@ -51,6 +48,7 @@ function drop(word, index) {
     game.erred[word.t] = 1
     mark(word, false, 'drag')
   }
+  buzz()
   game.bad = index
   game.selected = null
   toast('Olmadı, −1 puan. Tekrar dene!')
@@ -91,14 +89,19 @@ function onDown(event, word) {
   place(event)
 
   const move = (point) => {
+    if (point.cancelable) point.preventDefault()
     if (Math.abs(point.clientX - startX) + Math.abs(point.clientY - startY) > 8) moved = true
     place(point)
   }
 
-  const finish = (point) => {
+  const stop = () => {
     document.removeEventListener('pointermove', move)
     document.removeEventListener('pointerup', finish)
     document.removeEventListener('pointercancel', finish)
+  }
+
+  const finish = (point) => {
+    stop()
     cleanupDrag = null
     clone.remove()
     el.style.opacity = '1'
@@ -119,65 +122,87 @@ function onDown(event, word) {
   }
 
   cleanupDrag = () => {
-    document.removeEventListener('pointermove', move)
-    document.removeEventListener('pointerup', finish)
-    document.removeEventListener('pointercancel', finish)
+    stop()
     clone.remove()
     el.style.opacity = '1'
   }
-  document.addEventListener('pointermove', move)
+  document.addEventListener('pointermove', move, { passive: false })
   document.addEventListener('pointerup', finish)
   document.addEventListener('pointercancel', finish)
+}
+
+function showResult() {
+  if (game.finished || game.done.length !== game.targets.length) return
+  game.finished = true
 }
 
 function restart() {
   Object.assign(game, deal())
 }
 
+function setDragLock(on) {
+  if (typeof document === 'undefined') return
+  document.documentElement.classList.toggle('drag-lock', on)
+}
+
+watch(() => game.finished, (finished) => setDragLock(!finished), { immediate: true })
+
 onBeforeUnmount(() => {
   timers.forEach(clearTimeout)
   if (cleanupDrag) cleanupDrag()
   document.querySelectorAll('.chip2.fl').forEach((node) => node.remove())
+  setDragLock(false)
 })
 </script>
 
 <template>
-  <EndScreen
-    v-if="game.finished"
-    :correct="game.correct"
-    :total="game.targets.length"
-    @replay="restart"
-  />
-  <template v-else>
-    <TopBar />
-    <ProgressBar :value="game.done.length" :max="game.targets.length" />
-    <p class="sub hint">Türkçe kelimeyi sürükle, İngilizcesinin kutusuna bırak (ya da dokun, sonra kutuya dokun)</p>
-    <div
-      v-for="(word, index) in game.targets"
-      :key="word.t"
-      class="zone"
-      :class="{ ok: game.done.includes(word), bad: game.bad === index }"
-      :data-i="index"
-      @click="zoneClick(index)"
-    >
-      <b>{{ word.e }}</b>
-      <template v-if="game.done.includes(word)">
-        {{ word.t }} ✓
-        <span v-if="word.p" class="okunus">Okunuş: {{ word.p }}</span>
-      </template>
-      <template v-else>Türkçesini buraya bırak</template>
-    </div>
-    <div class="tray">
-      <div
-        v-for="word in game.chips"
-        v-show="!game.done.includes(word)"
-        :key="word.t"
-        class="chip2"
-        :class="{ s: game.selected === word }"
-        @pointerdown="onDown($event, word)"
-      >
-        {{ word.t }}
+  <div class="drag-screen">
+    <EndScreen
+      v-if="game.finished"
+      :correct="game.correct"
+      :total="game.targets.length"
+      @replay="restart"
+    />
+    <template v-else>
+      <TopBar />
+      <ProgressBar :value="game.done.length" :max="game.targets.length" />
+      <p class="sub hint">Türkçe kelimeyi sürükle, İngilizcesinin kutusuna bırak (ya da dokun, sonra kutuya dokun)</p>
+      <div class="zones">
+        <div
+          v-for="(word, index) in game.targets"
+          :key="word.t"
+          class="zone"
+          :class="{ ok: game.done.includes(word), bad: game.bad === index }"
+          :data-i="index"
+          @click="zoneClick(index)"
+        >
+          <b>{{ word.e }}</b>
+          <template v-if="game.done.includes(word)">
+            {{ word.t }} ✓
+            <span v-if="word.p" class="okunus">Okunuş: {{ word.p }}</span>
+          </template>
+          <template v-else>Türkçesini buraya bırak</template>
+        </div>
       </div>
-    </div>
-  </template>
+      <div class="tray">
+        <div
+          v-for="word in game.chips"
+          v-show="!game.done.includes(word)"
+          :key="word.t"
+          class="chip2"
+          :class="{ s: game.selected === word }"
+          @pointerdown="onDown($event, word)"
+        >
+          {{ word.t }}
+        </div>
+      </div>
+      <button
+        v-if="game.done.length === game.targets.length && game.targets.length"
+        class="btn g"
+        type="button"
+        @click="showResult"
+        @keydown.enter.prevent
+      >Sonuç ➜</button>
+    </template>
+  </div>
 </template>

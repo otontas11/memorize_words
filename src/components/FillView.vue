@@ -1,15 +1,14 @@
 <script setup>
-import { computed, onBeforeUnmount, reactive } from 'vue'
+import { computed, reactive } from 'vue'
+import { sentenceView } from '../data/words'
 import { choicesFor, mark, say, state } from '../composables/useStore'
 import EndScreen from './EndScreen.vue'
 import ProgressBar from './ProgressBar.vue'
 import TopBar from './TopBar.vue'
 
-const timers = []
-
 function takeQueue() {
   return state.w
-    .filter((word) => word.c)
+    .filter((word) => sentenceView(word.c, word.t)?.spoken)
     .map((word) => [word.s + (word.L ? 20 : 0) + Math.random() * 3, word])
     .sort((a, b) => a[0] - b[0])
     .slice(0, 8)
@@ -26,13 +25,7 @@ const session = reactive({
 })
 
 const current = computed(() => session.queue[session.index])
-
-const blank = computed(() => {
-  const sentence = current.value?.c || ''
-  const at = sentence.indexOf('___')
-  if (at < 0) return { before: sentence, after: '' }
-  return { before: sentence.slice(0, at), after: sentence.slice(at + 3) }
-})
+const view = computed(() => sentenceView(current.value?.c, current.value?.t))
 
 function prepare() {
   const word = session.queue[session.index]
@@ -43,10 +36,6 @@ function prepare() {
   if (!session.options) session.options = choicesFor(word)
 }
 
-function later(fn, ms) {
-  timers.push(setTimeout(fn, ms))
-}
-
 function choose(index) {
   if (session.answer !== null || session.finished) return
   const word = current.value
@@ -54,13 +43,16 @@ function choose(index) {
   session.answer = index
   if (ok) session.correct += 1
   mark(word, ok, 'fill')
-  say(word.c.replace('___', word.t))
-  later(() => {
-    session.index += 1
-    session.answer = null
-    session.options = null
-    prepare()
-  }, 2300)
+  const spoken = sentenceView(word.c, word.t)?.spoken
+  if (spoken) say(spoken)
+}
+
+function next() {
+  if (session.answer === null || session.finished) return
+  session.index += 1
+  session.answer = null
+  session.options = null
+  prepare()
 }
 
 function restart() {
@@ -74,7 +66,6 @@ function restart() {
 }
 
 prepare()
-onBeforeUnmount(() => timers.forEach(clearTimeout))
 </script>
 
 <template>
@@ -90,10 +81,10 @@ onBeforeUnmount(() => timers.forEach(clearTimeout))
     <div class="card">
       <div class="sub">Boşluğa uyan kelimeyi seç:</div>
       <div class="q sent">
-        {{ blank.before }}
-        <b v-if="session.answer !== null" class="hit">{{ current.t }}</b>
+        {{ view?.before }}
+        <b v-if="session.answer !== null" class="hit">{{ view?.token }}</b>
         <u v-else>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</u>
-        {{ blank.after }}
+        {{ view?.after }}
       </div>
       <div v-if="current.ce" class="sub trans">{{ current.ce }}</div>
       <p v-if="session.answer !== null && current.p" class="okunus">Okunuş: {{ current.p }}</p>
@@ -113,5 +104,12 @@ onBeforeUnmount(() => timers.forEach(clearTimeout))
         {{ option.t }}
       </button>
     </div>
+    <button
+      v-if="session.answer !== null"
+      class="btn g"
+      type="button"
+      @click="next"
+      @keydown.enter.prevent
+    >Sıradaki ➜</button>
   </template>
 </template>

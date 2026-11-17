@@ -1,3 +1,5 @@
+import { capitalizeTr, realizeSentence, sentenceView } from './inflect.js'
+
 const PAIRS = `
 büyük|big|big
 erkek çocuk|boy|boy
@@ -240,14 +242,207 @@ nefis|yummy|yami
 `
 
 const SENTENCE_LINES = `
+erkek çocuk|Bir ___ var.|There is a boy.
+kantin|Bir ___ var.|There is a canteen.
+sınıf|Bir ___ var.|There is a classroom.
+gün|Bir ___ var.|There is a day.
+arkadaş|Benim bir ___ var.|I have a friend.
+bahçe|Bir ___ var.|There is a garden.
+kız çocuk|Bir ___ var.|There is a girl.
+erkek okul müdürü|Bir ___ var.|There is a headmaster.
+kadın okul müdürü|Bir ___ var.|There is a headmistress.
+çocuk|Bir ___ var.|There is a kid.
+kütüphane|Bir ___ var.|There is a library.
+yemekhane|Bir ___ var.|There is a lunch hall.
+isim|Benim bir ___ var.|I have a name.
+insanlar|___ var.|There are people.
+yer|Bir ___ var.|There is a place.
+oyun alanı|Bir ___ var.|There is a playground.
+öğrenci|Bir ___ var.|There is a pupil.
+okul|Bir ___ var.|There is a school.
+spor salonu|Bir ___ var.|There is a sports hall.
+öğretmen|Benim bir ___ var.|I have a teacher.
+öğretmenler odası|Bir ___ var.|There is a teacher's room.
+hafta|Benim bir ___ var.|I have a week.
+çanta|Benim bir ___ var.|I have a bag.
+kara tahta|Bir ___ var.|There is a blackboard.
+tahta|Bir ___ var.|There is a board.
+kitap|Benim bir ___ var.|I have a book.
+kitaplık|Bir ___ var.|There is a bookcase.
+kutu|Bir ___ var.|There is a box.
+teneffüs|Bir ___ var.|There is a break.
+kedi|Bir ___ var.|There is a cat.
+sandalye|Bir ___ var.|There is a chair.
+duvar saati|Bir ___ var.|There is a clock.
+bilgisayar|Benim bir ___ var.|I have a computer.
+pastel boya|Onun bir ___ var.|She has a crayon.
+sıra|Bir ___ var.|There is a desk.
+kapı|Bir ___ var.|There is a door.
+defter|Benim bir ___ var.|I have a notebook.
+nesne|Bir ___ var.|There is an object.
+kurşun kalem|Onun bir ___ var.|She has a pencil.
+kalem kutusu|Benim bir ___ var.|I have a pencil case.
+resim|Bir ___ var.|There is a picture.
+silgi|Onun bir ___ var.|He has a rubber.
+makas|___ var.|There are scissors.
+kalemtıraş|Benim bir ___ var.|I have a sharpener.
+akıllı tahta|Bir ___ var.|There is a Smart Board.
+masa|Bir ___ var.|There is a table.
+duvar|Bir ___ var.|There is a wall.
+beyaz tahta|Bir ___ var.|There is a whiteboard.
+pencere|Bir ___ var.|There is a window.
+kol|Onun bir ___ var.|He has an arm.
+doğum günü|Benim bir ___ var.|I have a birthday.
+vücut|Bir ___ var.|There is a body.
+pasta|Bir ___ var.|There is a cake.
+mont|Onun bir ___ var.|He has a coat.
+elbise|Onun bir ___ var.|She has a dress.
+kulak|Onun bir ___ var.|She has an ear.
+göz|Onun bir ___ var.|He has an eye.
+yüz|Onun bir ___ var.|She has a face.
+hediye|Benim bir ___ var.|I have a gift.
+gözlük|___ var.|There are glasses.
+eldiven|___ var.|There are gloves.
+el|Onun bir ___ var.|She has a hand.
+kafa|Onun bir ___ var.|He has a head.
+ceket|Benim bir ___ var.|I have a jacket.
+bacak|Onun bir ___ var.|He has a leg.
+ağız|Onun bir ___ var.|She has a mouth.
+burun|Onun bir ___ var.|He has a nose.
+kukla|Bir ___ var.|There is a puppet.
+atkı|Onun bir ___ var.|She has a scarf.
+gömlek|Onun bir ___ var.|He has a shirt.
+ayakkabı|___ var.|There are shoes.
+pantolon|___ var.|There are trousers.
+tişört|Benim bir ___ var.|I have a T-shirt.
+şemsiye|Onun bir ___ var.|She has an umbrella.
+albüm|Benim bir ___ var.|I have an album.
+bebek|Bir ___ var.|There is a baby.
+erkek kardeş|Benim bir ___ var.|I have a brother.
+kız evlat|Onun bir ___ var.|She has a daughter.
+aile|Benim bir ___ var.|I have a family.
+büyükbaba|Benim bir ___ var.|I have a grandfather.
+büyükanne|Onun bir ___ var.|She has a grandmother.
+öğle yemeği|Bir ___ var.|There is a lunch.
+fotoğraf|Benim bir ___ var.|I have a photo.
+kız kardeş|Onun bir ___ var.|He has a sister.
+erkek evlat|Onun bir ___ var.|She has a son.
+balkon|Bir ___ var.|There is a balcony.
+banyo|Bir ___ var.|There is a bathroom.
+gaga|Onun bir ___ var.|He has a beak.
+yatak|Bir ___ var.|There is a bed.
+yatak odası|Bir ___ var.|There is a bedroom.
+kuş|Bir ___ var.|There is a bird.
+pençe|Bir ___ var.|There is a claw.
+sehpa|Bir ___ var.|There is a coffee table.
+salatalık|Bir ___ var.|There is a cucumber.
+yemek odası|Bir ___ var.|There is a dining room.
+köpek|Bir ___ var.|There is a dog.
+kapı zili|Bir ___ var.|There is a doorbell.
+oyuncak bebek evi|Bir ___ var.|There is a dollhouse.
+japon balığı|Bir ___ var.|There is a goldfish.
+ev|Benim bir ___ var.|I have a house.
+mutfak|Bir ___ var.|There is a kitchen.
+pati|Onun bir ___ var.|He has a paw.
+evcil hayvan|Benim bir ___ var.|I have a pet.
+tavşan|Bir ___ var.|There is a rabbit.
+oda|Bir ___ var.|There is a room.
+oturma odası|Bir ___ var.|There is a sitting room.
+kanepe|Bir ___ var.|There is a sofa.
+kuyruk|Onun bir ___ var.|She has a tail.
+hayvan bıyıkları|___ var.|There are whiskers.
+elma|Bir ___ var.|There is an apple.
+muz|Benim bir ___ var.|I have a banana.
+fasulye|Bir ___ var.|There is a bean.
+kahvaltı|Bir ___ var.|There is a breakfast.
+havuç|Onun bir ___ var.|She has a carrot.
+karnabahar|Bir ___ var.|There is a cauliflower.
+kiraz|Onun bir ___ var.|He has a cherry.
+tavuk|Bir ___ var.|There is a chicken.
+kahve|Benim bir ___ var.|I have a coffee.
+kabak|Bir ___ var.|There is a courgette.
+akşam yemeği|Bir ___ var.|There is a dinner.
+yumurta|Onun bir ___ var.|She has an egg.
+balık|Bir ___ var.|There is a fish.
+üzüm|Benim bir ___ var.|I have a grape.
+portakal|Bir ___ var.|There is an orange.
+armut|Onun bir ___ var.|He has a pear.
+biber|Bir ___ var.|There is a pepper.
+patates|Benim bir ___ var.|I have a potato.
+çilek|Onun bir ___ var.|She has a strawberry.
+çay|Bir ___ var.|There is a tea.
+domates|Onun bir ___ var.|He has a tomato.
+sebze|Bir ___ var.|There is a vegetable.
 `
 
-export const SENTENCES = Object.fromEntries(
+function articleOk(sentence) {
+  const pattern = /\b(a|an)\s+([A-Za-z][A-Za-z'-]*)/gi
+  let match = pattern.exec(sentence)
+  while (match) {
+    const article = match[1].toLowerCase()
+    const word = match[2]
+    const needsAn = /^(?:hour|honest|honour|heir)/i.test(word)
+      || (/^[aeiou]/i.test(word) && !/^(?:uni|use|one|eu)/i.test(word))
+    if (needsAn ? article !== 'an' : article !== 'a') return false
+    match = pattern.exec(sentence)
+  }
+  return true
+}
+
+function englishAgrees(frame, en) {
+  if (!en || !articleOk(en)) return false
+  if (frame.startsWith('Benim ')) return en.startsWith('I have ')
+  if (frame.startsWith('Onun ')) return en.startsWith('He has ') || en.startsWith('She has ')
+  if (frame.startsWith('Bir ')) return en.startsWith('There is ')
+  if (frame.startsWith('___')) return en.startsWith('There are ')
+  return false
+}
+
+function sameTr(left, right) {
+  return String(left || '').toLocaleLowerCase('tr') === String(right || '').toLocaleLowerCase('tr')
+}
+
+export const FRAMES = Object.fromEntries(
   SENTENCE_LINES.trim().split('\n').filter(Boolean).map((line) => {
     const [word, tr, en] = line.split('|')
     return [word, [tr, en]]
   }),
 )
+
+export const SENTENCES = Object.fromEntries(
+  Object.entries(FRAMES).flatMap(([word, [frame, en]]) => {
+    const spoken = realizeSentence(frame, word)
+    const view = spoken && sentenceView(spoken, word)
+    if (!spoken || !view || view.spoken !== spoken || !view.token) return []
+    if (!englishAgrees(frame, en)) return []
+    if ((frame.startsWith('Benim ') || frame.startsWith('Onun ')) && sameTr(view.token, word)) return []
+    return [[word, [spoken, en]]]
+  }),
+)
+
+export function naiveFills(frame, noun) {
+  const fills = [frame, frame.replace('___', noun)]
+  if (frame.startsWith('___')) fills.push(frame.replace('___', capitalizeTr(noun)))
+  return fills
+}
+
+export function bundledSentencePatch(turkish, c, ce) {
+  const frame = FRAMES[turkish]
+  if (!frame) return null
+  const desired = SENTENCES[turkish]
+  const desiredC = desired ? desired[0] : ''
+  const desiredCe = desired ? desired[1] || '' : ''
+  const currentC = c || ''
+  const currentCe = ce || ''
+  if (currentC === desiredC && currentCe === desiredCe) return null
+  const owned = !currentC
+    || currentC === desiredC
+    || naiveFills(frame[0], turkish).some((item) => sameTr(item, currentC))
+  if (!owned) return null
+  return { c: desiredC, ce: desiredCe }
+}
+
+export { sentenceView }
 
 export function defaultWords() {
   return PAIRS.trim().split('\n').map((line) => {
